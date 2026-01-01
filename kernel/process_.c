@@ -1,7 +1,9 @@
 #include <asm-generic/errno.h>
+#include <bits/pthreadtypes.h>
 #include <errno.h>
 #include <stdint.h>
 #include <pthread.h>
+#include <assert.h>
 #include <sched.h>
 #define _GNU_SOURCE
 #include <fcntl.h>
@@ -13,7 +15,6 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
-// #include <pthread.h>
 #include <stdatomic.h>
 
 #define MAX_FDS 1024
@@ -23,20 +24,6 @@
 #define NPROC 64 
 
 typedef struct FileDescriptorTable fd_table; 
-
-enum proc_state { UNUSED, EMBRYO, RUNNING, ZOMBIE };
-typedef struct Process {
-	pid_t pid;
-	fd_table *file_descriptor_table;
-	enum proc_state state;	
-	struct proc *parent;
-	char name[16]; // debugging 
-} proc;
-typedef struct ProcessTable {
-	proc procs[NPROC];
-	pthread_mutex_t lock;
-} ptable; 
-
 typedef struct OpenFileTable open_file;
 typedef struct InodeTable inode;
 typedef struct FD fd_table_entry;
@@ -68,8 +55,100 @@ struct InodeTable { // many open_files can point to one inode
 	atomic_uint refcnt; // how many refs in open file table 
 };
 
-proc *proc_init(pid_t pid);
-void proc_free(proc *p);
+enum proc_state { UNUSED, EMBRYO, RUNNING, ZOMBIE };
+typedef int pid_t;
+typedef struct Process {
+	pid_t pid;
+	fd_table *file_descriptor_table;
+	enum proc_state state;	
+	struct proc *parent;
+	pthread_mutex_t lock;
+	char name[16]; // debugging 
+} proc;
+static_assert(NPROC % 64 == 0, "NPROC must be a multiple of 64");
+typedef struct ProcessTable {
+	proc procs[NPROC];
+	pthread_mutex_t lock;
+	
+	uint64_t pid_bitmap[NPROC/64];
+	pid_t next_pid;
+} ptable; 
+static ptable global_ptable = {
+	.lock = PTHREAD_MUTEX_INITIALIZER,
+	.next_pid = 1
+};
+
+proc *proc_alloc(void) {
+    if (pthread_mutex_lock(&global_ptable.lock) != 0) {
+        perror("pthread_mutex_lock");
+        return NULL;
+    }
+
+    for (size_t i = 0; i < NPROC/64; i++) {
+        uint64_t word = global_ptable.pid_bitmap[i];
+        if (word == UINT64_MAX) continue;
+
+        for (size_t b = 0; b < 64; b++) {
+            size_t proc_idx = (i << 6) + b;
+            if (proc_idx >= NPROC) break;
+
+            if ((word & (1ULL << b)) == 0) {
+                proc *p = &global_ptable.procs[proc_idx];
+                if (pthread_mutex_lock(&p->lock) != 0) {
+                    perror("pthread_mutex_lock proc");
+                    pthread_mutex_unlock(&global_ptable.lock);
+                    return NULL;
+                }
+
+                p->state = EMBRYO;
+                p->pid = global_ptable.next_pid++;
+                global_ptable.pid_bitmap[i] |= (1ULL << b);
+
+                pthread_mutex_unlock(&p->lock);
+                pthread_mutex_unlock(&global_ptable.lock);
+                return p;
+            }
+        }
+    }
+
+    pthread_mutex_unlock(&global_ptable.lock);
+    return NULL;
+}
+static inline void fdtable_rm(fd_table *table);
+void proc_free(proc *p) {
+	if (__builtin_expect(!p, 0)) {
+        	errno = EINVAL;
+        	return;
+	}
+	if (pthread_mutex_lock(&global_ptable.lock) != 0) {
+		perror("pthread_mutex_lock");
+		errno = EINVAL;
+		return;
+	}
+	pthread_mutex_lock(&p->lock);
+
+	fdtable_rm(p->file_descriptor_table);
+	p->file_descriptor_table = NULL;
+
+	p->state = UNUSED;
+	p->pid = 0;
+
+	size_t idx = (p - global_ptable.procs); 
+	global_ptable.pid_bitmap[idx >> 6] &= ~(1ULL << idx & 63);
+
+	if (p->parent) {
+		// to be implemented	
+		p->parent = NULL;
+	}
+
+	pthread_mutex_unlock(&global_ptable.lock);
+	pthread_mutex_unlock(&p->lock);
+}
+
+proc *proc_fork(proc *parent) {
+
+}
+
 proc *proc_fork(proc *parent);
 proc *proc_fdtable(proc *p);
 void proc_set_fdtable(proc *p, fd_table *table);
