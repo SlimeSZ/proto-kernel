@@ -8,7 +8,7 @@
 
 # Executables
 a.out
-kernel
+# kernel
 kernel_sim
 main
 
@@ -30,7 +30,7 @@ main
 Thumbs.db
 
 # ===== Build dirs =====
-build/
+builds/
 dist/
 
 # ===== Optional: perf / profiling =====
