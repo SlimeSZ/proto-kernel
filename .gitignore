@@ -1,0 +1,40 @@
+# ===== Build artifacts =====
+*.o
+*.a
+*.so
+*.out
+*.elf
+*.bin
+
+# Executables
+a.out
+kernel
+kernel_sim
+main
+
+# ===== Debug / temp =====
+*.log
+*.tmp
+*.swp
+*.swo
+*.bak
+*~
+
+# ===== IDE / editor =====
+.vscode/
+.idea/
+*.code-workspace
+
+# ===== OS junk =====
+.DS_Store
+Thumbs.db
+
+# ===== Build dirs =====
+build/
+dist/
+
+# ===== Optional: perf / profiling =====
+perf.data
+perf.data.old
+vgcore.*
+
